@@ -1,104 +1,99 @@
 # Work Queue
 
-How this repository decides what is next. The contract in one paragraph: exactly
-one open issue labelled `type/roadmap` carries a `## Work Queue In Priority
-Order` section; that order — with epic `## Child Issues In Priority Order`
-sections beneath it — is repository priority. Dependency links gate execution;
-status labels gate readiness. Neither ever overrides the written order. The
-queue tree carries one invariant — every open issue except the roadmap itself
-sits on exactly one priority list and blocks that parent — specified in full
-in the gitea-issues `references/repository-queue.md` reference. Every open
-direct child of the roadmap — epic or standalone entry — blocks the roadmap,
-one edge per direct child and never edges to the whole backlog, so the Gitea
-UI **Blocks** section links each level of the tree to the root.
+How this repository decides what is next. The contract in one paragraph:
+`docs/agents/issue-workflow.toml` names this repository's relationship mode
+(`independent`) and its one priority source — the open `type/roadmap` issue
+whose `## Goals In Priority Order` section orders the top-level goals. Each
+relationship has exactly one authority: an epic's
+`## Child Issues In Priority Order` list records **containment**, the goal
+order and then each epic's child order record **priority**, a native Gitea
+dependency edge records a **prerequisite** ("this must finish before that can
+proceed"), and `status/*` labels record **readiness**. Placement never writes
+an edge and a prerequisite never changes placement. The gitea-issues
+`references/repository-queue.md` reference specifies the full contract.
 
-Priority lists use `- [ ] #123 Title` and `- [x] #123 Title`. Physical order
-sets priority; the checkbox is a progress display. A checked entry represents
-a closed issue with `status/done`, including an epic accepted and closed
-separately. `status/wontfix` and historical closed issues without
-`status/done` stay unchecked. `queue inspect` reports disagreements; clicks
-never change readiness, closure, or prerequisites. Convert numbered lists
-through reviewed `checklist preview` and guarded `checklist apply`.
+Goals and epic children use `- [ ] #123 Title` or `- [x] #123 Title`.
+Physical order sets priority. A checked entry represents a closed issue with
+`status/done`; clicks change only the display and inspection reports any
+state disagreement. Numbered lists remain readable until reviewed conversion
+through `checklist preview` and guarded `checklist apply`.
 
 ## Reading the queue
 
-- **Health and explanations**: `queue inspect` — status counts, skipped
-  entries, unqueued ready work, tree-invariant violations, structural
-  anomalies.
-- **Placement and reconciliation**: `queue roadmap` — targeted top-level order
-  and current `content_version`, without dependency scans.
-- **What is next**: `queue next` — read-only selection of the highest-priority
-  executable leaf, with every higher-ranked skip explained.
+- **Goals**: `queue goals` — the configured source's ordered goals and its
+  version token, without dependency scans.
+- **Health and explanations**: `queue inspect` — the relationship model's
+  structural, prerequisite, navigation, and ordering findings, and the
+  selection.
+- **What is next**: `queue next` — read-only goal-first selection: goals in
+  priority order, detouring into whatever prerequisite work a goal needs,
+  wherever that work is placed. It reports the selected issue's own
+  placement apart from the requesting goal and the prerequisite chain.
 
-Both are read-only. Inspecting never claims anything; claim separately with
-`issue start --issue <number>`, which creates the `ISSUE-<number>` worktree and
-moves the issue to `status/in-progress`.
+All three are read-only. Claim separately with `issue start --issue <number>`,
+which re-checks the issue's effective prerequisites (its own and every
+containing epic's) before creating the `ISSUE-<number>` worktree.
 
-## Changing the queue
+## Changing placement
 
-Queue edits are explicit mutations, never side effects of other work:
+Placement edits are explicit mutations, never side effects of other work.
+Each writes the owning list or lists first, guarded by their
+`content_version`, then rewrites the placed issue's derived first-line
+`Parent: #<n> <title>` link; a failed line write is reported with its repair
+and never retried.
 
-- `queue init` — create the canonical roadmap if absent (idempotent).
-- `queue insert --issue <n> --position <p> --expected-content-version <v>` —
-  add a top-level epic, or a standalone issue with `--allow-standalone`.
-  Inserting an open entry — epic or standalone — also links it as blocking
-  the roadmap (reported separately from the body write).
+- `queue insert --issue <n> [--position <p>] --expected-content-version <v>` —
+  place a top-level epic (or a standalone issue with `--allow-standalone`)
+  among the goals; the default position is the top.
 - `queue reorder --issue <n> ... --expected-content-version <v>` — rewrite the
-  top-level order, naming every current entry exactly once.
-- `queue link-children preview` / `apply --confirm` — classify and repair the
-  direct-child blocking edges to the roadmap (read-only preview; confirmed
-  apply creates exactly the missing edges, streaming `[queue]` progress
-  milestones with the terminal summary and exit status authoritative).
+  goal order, naming every goal exactly once; no issue body changes.
+- `placement set --issue <n> --epic <e> [--position <p>]` — place an issue in
+  an epic's child list (the default position is the top), moving it from its
+  current list when it has one.
+- `placement remove --issue <n> --epic <e>` (or `--top-level`) — leave it
+  unplaced; `placement reorder --epic <e> --issue <n> ...` — reorder one
+  child list.
+- `placement sync-parent --issue <n>` — regenerate a stale `Parent:` line from
+  placement; it never moves the issue.
 
-Mutations send the optimistic-locking `content_version` printed by `queue roadmap`.
-On any ambiguous result, re-run `queue roadmap` and reconcile before retrying;
-never blindly re-run a mutation.
+On a stale version or an ambiguous result, re-read (`queue goals` or
+`issue read`) and reconcile before issuing a new command; never blindly
+re-run a mutation. Replaying a completed or half-completed placement writes
+only what is still missing.
 
-## Adopting existing epics
+## Changing prerequisites
 
-Epics created before this contract may carry legacy child-order sections.
-`epic migrate-children preview` inventories them read-only and classifies each
-open epic; the owner confirms each proposed migration, and
-`epic migrate-children apply --epic <n> --expected-content-version <v>`
-rewrites one epic at a time under the queue contract's rules. Ambiguous epics
-go back to the owner with their diagnostics. The gitea-issues
-`references/repository-queue.md` reference documents the full contract.
+- `prerequisite add --issue <x> --requires <y>` — `x` cannot proceed until
+  `y` closes. The edge implies no ownership, placement, or priority.
+- `prerequisite remove --issue <x> --requires <y>` — remove that one edge.
 
-## Moving to independent mode
+Both change edges only and verify the result with a fresh read. A
+prerequisite on an epic gates its whole subtree; to gate one child, put the
+edge on that child. `epic add-dependency --parent <x> --child <y>` is the
+legacy alias of `prerequisite add --issue <x> --requires <y>`, and it refuses
+an edge from an epic to its own listed child. `queue link-children` is a
+legacy-mode repair and refuses here.
 
-In `legacy` mode, which this document describes, a native edge may mean
-containment, navigation, or a prerequisite. A repository moves to
-`independent` mode — edges mean prerequisites only — through a reviewed
-migration, never a setup rerun: `migration preview --history --write-plan <file>` classifies every
-edge read-only, the owner reviews the plan, `migration freeze` makes every
-roadmap-driven helper fail closed, `migration apply --plan <file>` removes
-only the projection edges the evidence proves and writes each placed
-issue's `Parent:` line, `migration readiness` confirms nothing blocks, and a
-reviewed commit of `relationship_mode = "independent"` activates it. The
-gitea-issues `references/repository-queue.md` reference documents recovery
-and rollback.
+## Who is placed where
 
-## Who enters the roadmap
-
-Only two kinds of issue: a top-level delivery epic, and an explicitly
-standalone actionable issue. Epic children never enter the roadmap — they stay
-in the epic's child-priority list plus dependency links, under the
-queue-tree invariant stated above.
+Every open work issue has exactly one placement: a top-level goal (a delivery
+epic, or a standalone issue admitted explicitly) or one entry in one open
+epic's child list. Unplaced work stays visible as an `unplaced-open-issue`
+finding with no implicit rank.
 
 ## Default placement for new issues
 
-Newly published work with no priority statement from the user enters at the
-default position — the highest its dependencies allow, per the default rule
-in the gitea-issues `references/create-and-organize.md` queue-placement
-contract; an explicit statement from the user always wins. Creation and
-placement remain two explicit, reconcilable operations either way, and
-genuinely unresolved placement still publishes unqueued and stays visible
-under "Unqueued ready work".
+New work with no priority statement from the user enters at position 1 of the
+list it belongs to — the goals for an epic or standalone issue, its epic's
+child list for a child. There is no dependency ceiling: a dependent may rank
+above its own prerequisite, and selection honours the prerequisite by detour.
+An explicit statement of priority always wins; genuinely unresolved placement
+publishes the issue unplaced.
 
 ## After reviewed work merges
 
-`pr cleanup` merges reviewed work and reconciles its issue. Continuation then
-recommends exactly one follow-up, in order: newly unblocked dependents, the
-current epic's next executable child, the roadmap's next executable leaf, or an
-explicit blocked/empty result. Recommendations only — starting the next issue
-needs its own authorization.
+`pr cleanup` merges reviewed work and reconciles its issue, then recommends
+exactly the `queue next` selection. Dependents the merge unblocked are listed
+as information and never outrank goal priority; an epic whose last child
+closed is reported as awaiting acceptance, never closed automatically.
+Recommendations only — starting the next issue needs its own authorization.

@@ -1,7 +1,7 @@
 # The relationship mode and the one authoritative priority source, read by the
 # gitea-issues helpers from the default branch. Change it only through a
 # reviewed commit: activation, rollback, and source changes are migrations.
-relationship_mode = "legacy"
+relationship_mode = "independent"
 
 [priority_source]
 kind = "roadmap"

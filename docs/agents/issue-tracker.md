@@ -19,7 +19,7 @@ hand-write API calls. Resolve `<gitea-issues>` from the installed skill path.
 Repository identity comes from the `origin` remote or the resolved credentials;
 the helpers never need a token pasted into chat.
 
-Read-only commands (`issue list`, `queue roadmap|inspect|next`, `epic
+Read-only commands (`issue list`, `queue goals|inspect|next`, `epic
 next-ready`/`start-next` selection) reuse unchanged reads through a
 conditional cache that never touches mutation preflights or read-after-write
 verification. Disable it with `GITEA_READ_CACHE=off`, inspect it with
@@ -48,7 +48,7 @@ migration and later selected archival require reviewed previews in
 Active Epics; individual work stays in In Progress. Existing eight-column
 boards use the reviewed `issue-project-board` migration.
 See `docs/agents/triage-labels.md` for the triage-role mapping and
-`docs/agents/queue.md` for the roadmap contract.
+`docs/agents/queue.md` for the placement and prerequisite contract.
 
 `issue edit-labels` changes only named existing non-status labels, preserving
 unrelated labels. It validates every requested name before writing, adds before
@@ -56,36 +56,34 @@ removing, and verifies the requested result with a fresh read. A satisfied
 replay writes nothing. Use `issue set-status` for `status/*` transitions.
 Writes are incremental: after a write or verification failure, reconcile with
 `issue read` before retrying. Changing `type/epic` does not create child order,
-blocking edges, or roadmap placement; use their separate helper operations.
+prerequisite edges, or goal placement; use their separate helper operations.
 
 ## The repository work queue
 
-Exactly one open issue labelled `type/roadmap` holds the
-`## Work Queue In Priority Order` section that defines repository priority;
-epics order children the same way. Each list entry uses `- [ ] #123 Title` or
-`- [x] #123 Title`; checkboxes display closed `status/done` progress and do
-not change workflow state. `queue inspect` reports disagreements. Convert
-numbered lists only through reviewed `checklist preview` and guarded
-`checklist apply`. Dependencies gate execution; they never define priority.
+`docs/agents/issue-workflow.toml` puts this repository in `independent`
+relationship mode and names its one priority source: the open `type/roadmap`
+issue whose `## Goals In Priority Order` section orders the top-level goals.
+Goals and epic children use `- [ ] #123 Title` or `- [x] #123 Title`.
+Physical order sets priority; checkboxes display confirmed closed
+`status/done` progress. Use reviewed `checklist preview` and guarded
+`checklist apply` to convert existing numbered lists.
+Epic child lists record containment and child priority; native dependency
+edges record prerequisites only; `status/*` labels record readiness.
 
-- **Inspect**: `queue inspect` (health, skipped entries, tree-invariant violations, selected leaf)
-- **Read placement state**: `queue roadmap` (top-level order and content version)
-- **Select read-only**: `queue next`
-- **Maintain**: `queue init` (idempotent), `queue insert --issue <n> --position <p> --expected-content-version <v>`, `queue reorder`, `queue link-children preview` / `apply --confirm` (direct-child blocking edges)
-- **Move to `independent` mode**: the reviewed edge migration — `migration preview --history --write-plan <file>`, `migration freeze`, `migration apply --plan <file>`, `migration readiness`, then a reviewed configuration commit (see the gitea-issues `references/repository-queue.md`)
+- **Read the goals**: `queue goals` (goal order and version token)
+- **Inspect**: `queue inspect` (relationship findings and the selection)
+- **Select read-only**: `queue next` (goal-first, detouring into prerequisites)
+- **Place**: `queue insert --issue <n> [--position <p>] --expected-content-version <v>` and `queue reorder` for goals; `placement set --issue <n> --epic <e> [--position <p>]`, `placement remove`, and `placement reorder` for child lists; `placement sync-parent --issue <n>` regenerates a stale `Parent:` line
+- **Prerequisites**: `prerequisite add --issue <x> --requires <y>` and `prerequisite remove` (edges only, verified by a fresh read); `epic add-dependency --parent <x> --child <y>` is the legacy alias of `prerequisite add --issue <x> --requires <y>` and refuses an epic's edge to its own listed child
 
 Only top-level delivery epics and explicitly standalone issues
-(`--allow-standalone`) enter the roadmap. When the user has not stated a
-priority, new work enters at the default position from the gitea-issues
-queue-placement contract — the highest its dependencies allow — and an
-explicit statement always wins. The queue tree carries one
-invariant — every open issue except the roadmap itself sits on exactly one
-priority list and blocks that parent — specified in full in the gitea-issues
-`references/repository-queue.md` reference. Inserting an open entry — epic or
-standalone — links it as blocking the roadmap, so the Gitea UI **Blocks**
-section links each level to the root; the roadmap never takes dependency
-edges beyond its direct children (its queue entries). `queue link-children`
-repairs missing direct-child edges.
+(`--allow-standalone`) are goals. When the user has not stated a priority, new
+work enters at position 1 of its list, with no dependency ceiling; an explicit
+statement always wins. Placement writes the owning list, then the issue's
+derived `Parent: #<n>` first line, and never an edge; a prerequisite write
+never changes placement. `queue link-children` is a legacy-mode repair and
+refuses here. The gitea-issues `references/repository-queue.md` reference
+specifies the full contract.
 
 ## Pull requests as a triage surface
 
@@ -100,15 +98,15 @@ through `/triage`.
 ## When a skill says "publish to the issue tracker"
 
 Create a Gitea issue with `issue create`, then place it explicitly: group
-implementation work under a delivery epic (children linked with
-`epic add-dependency --parent <epic> --child <child>`, the legacy alias of
-`prerequisite add --issue <epic> --requires <child>`, and ordered in the epic's
-`## Child Issues In Priority Order` section) and insert only the epic — or an
-explicitly standalone issue — into the roadmap with `queue insert`. Creation
+implementation work under a delivery epic — place each child with
+`placement set --issue <child> --epic <epic>`, which writes the epic's
+`## Child Issues In Priority Order` list and the child's `Parent:` line — and
+place only the epic, or an explicitly standalone issue, among the goals with
+`queue insert`. Add a `prerequisite add` edge only where one issue genuinely
+must finish before another can proceed; containment needs no edge. Creation
 and placement stay two separate, reconcilable operations; when the user gave
-no priority, apply the default-placement rule from that contract and say so
-with the proposal, and publish unqueued only when placement is genuinely
-unresolved.
+no priority, place at position 1 and say so with the proposal, and publish
+unplaced only when placement is genuinely unresolved.
 
 ## When a skill says "fetch the relevant ticket"
 
@@ -117,11 +115,15 @@ Run `issue read --issue <number> --comments`.
 ## Wayfinding operations
 
 Used by `/wayfinder`. The **map** is a single issue labelled `wayfinder:map`;
-its **child tickets** are plain issues that block the map.
+its **child tickets** are plain issues that name it with a `Part of #<map>`
+body link. Membership is that link alone — no edge joins a ticket to its map.
+Maps and tickets are decision work outside the delivery queue: they stay
+unplaced (reported as `unplaced-open-issue`, never selected by `queue next`)
+unless the owner places them.
 
 - **Map**: `issue create --title "..." --label wayfinder:map` holding the Notes / Decisions-so-far / Fog body.
-- **Child ticket**: an issue labelled `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`) with `Part of #<map>` at the top of its body, linked to the map with `prerequisite add --issue <map> --requires <n>` (the map waits for each ticket).
-- **Blocking**: Gitea dependency links — the map is blocked by every child. `issue read` reports open blockers, which are the live gate.
+- **Child ticket**: an issue labelled `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`) with `Part of #<map>` at the top of its body.
+- **Blocking**: Gitea dependency links between tickets only — `prerequisite add --issue <ticket> --requires <blocker>` when one ticket's decision genuinely waits for another's. `issue read` reports open blockers, which are the live gate.
 - **Frontier query**: `issue list --state open --label wayfinder:map`-scoped children (list open issues, keep those mentioning `Part of #<map>`), drop any with an open blocker or `status/in-progress`; first in map order wins.
 - **Claim**: move the ticket to `status/in-progress` with `issue set-status`.
 - **Resolve**: `issue comment --issue <n> --body "<answer>"`, then use `issue close --issue <n> --status status/done --comment "Decision accepted; see the resolution comment."` for an explicitly authorized accepted decision; use `status/wontfix` for declined work and `pr cleanup` for PR-backed implementation. Gist the decision into the map's Decisions-so-far.

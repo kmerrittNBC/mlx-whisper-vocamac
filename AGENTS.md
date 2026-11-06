@@ -16,7 +16,9 @@ single layout: CONTEXT.md and ADRs live per `docs/agents/domain.md`.
 
 ### Work queue
 
-Priority lives in the `type/roadmap` issue's ordered queue; see `docs/agents/queue.md`.
+Priority lives in the source named by `docs/agents/issue-workflow.toml`, epic child
+lists record containment, and native dependencies are prerequisites only; see
+`docs/agents/queue.md`.
 
 ### Working standards
 
