@@ -34,7 +34,7 @@ Start the service:
 uv run mlx-whisper-vocamac
 ```
 
-The API starts on `http://127.0.0.1:8000`. The first dictation downloads the pinned
+The API starts on `http://127.0.0.1:8765`. The first dictation downloads the pinned
 model (about 1.6 GB) and loads it; later requests reuse the local cache. Audio is
 held in a request-scoped temporary file while FFmpeg/MLX reads it, and that file is
 removed after the request. Transcripts and audio are not logged.
@@ -98,21 +98,21 @@ checkout. Confirm that `/health` is `starting` before the first transcription.
 The following macOS-only smoke test synthesizes disposable speech outside the
 checkout, discards the response body, and checks that the endpoint succeeds and
 then becomes ready. Confirm the default API port is not already occupied with
-`lsof -nP -iTCP:8000 -sTCP:LISTEN`; if another process owns it, resolve that
+`lsof -nP -iTCP:8765 -sTCP:LISTEN`; if another process owns it, resolve that
 conflict before starting this service.
 
 ```sh
 set -eu
 test_dir="$(mktemp -d "${TMPDIR:-/tmp}/mlx-whisper-agent-check.XXXXXX")"
 trap 'rm -rf "$test_dir"' EXIT
-curl --silent --show-error --include http://127.0.0.1:8000/health
+curl --silent --show-error --include http://127.0.0.1:8765/health
 say -o "$test_dir/sample.aiff" "The local transcription service is running."
 ffmpeg -hide_banner -loglevel error -y -i "$test_dir/sample.aiff" \
   -ar 16000 -ac 1 "$test_dir/sample.wav"
 curl --fail --silent --show-error --output /dev/null --write-out 'HTTP %{http_code}\n' \
-  http://127.0.0.1:8000/v1/audio/transcriptions \
+  http://127.0.0.1:8765/v1/audio/transcriptions \
   -F model=transcription-default -F "file=@$test_dir/sample.wav"
-curl --silent --show-error http://127.0.0.1:8000/health
+curl --silent --show-error http://127.0.0.1:8765/health
 ```
 
 Expected: `status` reports the loaded LaunchAgent; the initial health response
@@ -129,7 +129,7 @@ set:
 
 | Setting | Value |
 | --- | --- |
-| Base URL | `http://127.0.0.1:8000` |
+| Base URL | `http://127.0.0.1:8765` |
 | Model | `transcription-default` |
 | API key | Leave blank |
 
@@ -142,13 +142,13 @@ reverse proxy or change its bind address without adding an authentication bounda
 Health is `starting` until one request has loaded and successfully used the model:
 
 ```sh
-curl -i http://127.0.0.1:8000/health
+curl -i http://127.0.0.1:8765/health
 ```
 
 Send a local recording:
 
 ```sh
-curl -sS http://127.0.0.1:8000/v1/audio/transcriptions \
+curl -sS http://127.0.0.1:8765/v1/audio/transcriptions \
   -F model=transcription-default \
   -F file=@recording.wav
 ```
