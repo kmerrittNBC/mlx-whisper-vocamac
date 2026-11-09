@@ -25,6 +25,7 @@ dev = [
 
 [project.scripts]
 mlx-whisper-vocamac = "mlx_whisper_vocamac.cli:main"
+mlx-whisper-vocamac-agent = "mlx_whisper_vocamac.launch_agent:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

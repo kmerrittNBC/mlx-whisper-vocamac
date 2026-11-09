@@ -39,6 +39,89 @@ model (about 1.6 GB) and loads it; later requests reuse the local cache. Audio i
 held in a request-scoped temporary file while FFmpeg/MLX reads it, and that file is
 removed after the request. Transcripts and audio are not logged.
 
+## Start automatically at login
+
+From the checkout you want the service to use, install or update its per-user
+LaunchAgent:
+
+```sh
+uv run mlx-whisper-vocamac-agent install
+```
+
+This operation is safe to repeat. It creates or updates
+`~/Library/LaunchAgents/com.anodyine.mlx-whisper-vocamac.plist`, registers and
+starts the service immediately, and starts it at future logins. It does not use
+`sudo` or install a system LaunchDaemon. The plist runs that checkout's
+`.venv/bin/python` with the checkout as its working directory. Before changing
+the LaunchAgent, the command checks that the selected Python environment and
+FFmpeg are available and reports setup instructions if either is missing. Run
+`uv sync --group dev` after changing dependencies, then repeat the install
+command to update the registered job. There is one service per macOS user; if
+you install from another checkout, that checkout replaces the service's source
+path.
+
+Run the following commands from the same checkout. `start` and `restart` load
+the LaunchAgent if it is currently stopped; `stop` unloads it for the current
+login session, while leaving it configured to start at the next login.
+
+```sh
+uv run mlx-whisper-vocamac-agent start
+uv run mlx-whisper-vocamac-agent stop
+uv run mlx-whisper-vocamac-agent restart
+uv run mlx-whisper-vocamac-agent status
+uv run mlx-whisper-vocamac-agent uninstall
+```
+
+`status` prints the `launchctl` job details and exits with an error if the job is
+not loaded. `uninstall` unloads the job and removes only its plist; operational
+logs and downloaded model files are preserved. If the service exits
+unexpectedly, launchd restarts it and applies a 30-second restart throttle to
+avoid a rapid restart loop. `restart` forces an immediate restart when manual
+recovery is needed. Inspect these files when diagnosing startup failures:
+
+- `~/Library/Logs/mlx-whisper-vocamac/service.log`
+- `~/Library/Logs/mlx-whisper-vocamac/error.log`
+
+The LaunchAgent writes logs with user-only file permissions. It does not enable
+HTTP access logging, and the service does not log submitted audio or transcript
+text. The model cache is kept at
+`~/.cache/huggingface`, the standard Hugging Face cache location, outside the
+checkout, and is not removed by `uninstall`.
+
+The service does not warm the model at login. `/health` remains `starting`
+until the first transcription successfully loads and uses the model; a missing
+model is downloaded to the external cache on that first request.
+
+To verify automatic login startup, install the agent, log out and back in (or
+restart macOS), then run `uv run mlx-whisper-vocamac-agent status` from the same
+checkout. Confirm that `/health` is `starting` before the first transcription.
+The following macOS-only smoke test synthesizes disposable speech outside the
+checkout, discards the response body, and checks that the endpoint succeeds and
+then becomes ready. Confirm the default API port is not already occupied with
+`lsof -nP -iTCP:8000 -sTCP:LISTEN`; if another process owns it, resolve that
+conflict before starting this service.
+
+```sh
+set -eu
+test_dir="$(mktemp -d "${TMPDIR:-/tmp}/mlx-whisper-agent-check.XXXXXX")"
+trap 'rm -rf "$test_dir"' EXIT
+curl --silent --show-error --include http://127.0.0.1:8000/health
+say -o "$test_dir/sample.aiff" "The local transcription service is running."
+ffmpeg -hide_banner -loglevel error -y -i "$test_dir/sample.aiff" \
+  -ar 16000 -ac 1 "$test_dir/sample.wav"
+curl --fail --silent --show-error --output /dev/null --write-out 'HTTP %{http_code}\n' \
+  http://127.0.0.1:8000/v1/audio/transcriptions \
+  -F model=transcription-default -F "file=@$test_dir/sample.wav"
+curl --silent --show-error http://127.0.0.1:8000/health
+```
+
+Expected: `status` reports the loaded LaunchAgent; the initial health response
+is HTTP 503 with `{"status":"starting"}`; the transcription request prints
+`HTTP 200`; the final health response is `{"status":"ready"}`. Record
+the observed job state and HTTP result in the implementation PR or issue, not
+in a repository evidence file. Do not retain or commit a real recording or
+transcript.
+
 ## Configure VocaMac
 
 In **Settings → Speech Model → Custom Endpoint**, select **OpenAI-compatible** and

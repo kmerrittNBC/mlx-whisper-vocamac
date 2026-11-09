@@ -20,3 +20,7 @@ def main() -> None:
         log_level="info",
         access_log=False,
     )
+
+
+if __name__ == "__main__":
+    main()
