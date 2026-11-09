@@ -84,6 +84,8 @@ def test_install_writes_selected_checkout_and_throttles_unexpected_restarts(
     assert plist["Umask"] == 0o077
     assert not Path(plist["StandardOutPath"]).is_relative_to(manager.checkout)
     assert not Path(plist["EnvironmentVariables"]["HF_HOME"]).is_relative_to(manager.checkout)
+    assert manager.plist_path.stat().st_mode & 0o777 == 0o600
+    assert manager.log_dir.stat().st_mode & 0o777 == 0o700
     assert runner.calls == [
         ["launchctl", "print", f"gui/501/{LABEL}"],
         ["launchctl", "bootstrap", "gui/501", str(manager.plist_path)],
