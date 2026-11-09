@@ -118,8 +118,13 @@ During onboarding:
 
 ## Configure the Custom Endpoint
 
-In VocaMac, open **Settings → Speech Model**, select **Custom Endpoint**, and
-choose **OpenAI-compatible**. Enter these exact values:
+In VocaMac, open **Settings → Speech Model**. In the model list, locate
+**Custom Endpoint** and click its **Use** button. Confirm the summary at the top
+says **Using Custom Endpoint** and the row is marked **In Use**. Filling the
+settings card alone does not activate the endpoint.
+
+Expand the **Custom Endpoint** settings card, choose **OpenAI-compatible**, and
+enter these exact values:
 
 | Field | Value |
 | --- | --- |
@@ -170,6 +175,34 @@ curl --silent --show-error http://127.0.0.1:8765/health
 Expected: the request prints `HTTP 200` and health prints
 `{"status":"ready"}`. The first request may take longer while the model is
 downloaded and loaded. Do not use a private recording for this smoke test.
+
+### Optional foreground troubleshooting
+
+Use this two-terminal path only when diagnosing the LaunchAgent. Do not run a
+foreground server while the LaunchAgent is listening on port 8765.
+
+**Terminal A — stop the LaunchAgent and run the server in the foreground:**
+
+```sh
+uv run mlx-whisper-vocamac-agent stop
+uv run mlx-whisper-vocamac
+```
+
+Expected: Uvicorn reports `http://127.0.0.1:8765` and stays in the foreground.
+Keep this terminal open while testing.
+
+**Terminal B — check health and run the HTTP smoke test:**
+
+```sh
+curl -i http://127.0.0.1:8765/health
+```
+
+Run the synthetic smoke-test command above in Terminal B. Press Control-C in
+Terminal A to stop the foreground server, then restore automatic startup:
+
+```sh
+uv run mlx-whisper-vocamac-agent start
+```
 
 ## Verify VocaMac dictation
 
