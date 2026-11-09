@@ -83,7 +83,7 @@ the repository; cold-start and warm-request timings are recorded.
 VocaMac's Custom Endpoint settings, or insertion at the active cursor.
 
 **Scope:** Configure VocaMac's OpenAI-compatible Custom Endpoint to use
-`http://127.0.0.1:8000` and model `transcription-default`. Verify push-to-talk,
+`http://127.0.0.1:8765` and model `transcription-default`. Verify push-to-talk,
 ordinary speech, silence, and insertion into more than one text field.
 
 **Acceptance criteria:** Dictated words are inserted at the intended cursor;

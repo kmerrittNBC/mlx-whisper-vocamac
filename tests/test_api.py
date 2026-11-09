@@ -101,10 +101,19 @@ def test_oversized_audio_is_rejected_before_backend_call() -> None:
 def test_health_is_not_ready_until_a_transcription_succeeds() -> None:
     client = TestClient(create_app(transcriber=lambda *_args, **_kwargs: {"text": "ok"}))
 
-    response = client.get("/health")
+    starting = client.get("/health")
 
-    assert response.status_code == 503
-    assert response.json() == {"status": "starting"}
+    assert starting.status_code == 503
+    assert starting.json() == {"status": "starting"}
+
+    transcription = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": MODEL_ALIAS},
+        files=wav_upload(),
+    )
+
+    assert transcription.status_code == 200
+    assert client.get("/health").json() == {"status": "ready"}
 
 
 def test_backend_error_does_not_expose_exception_text() -> None:

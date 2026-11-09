@@ -8,7 +8,7 @@ import uvicorn
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the local MLX Whisper API for VocaMac.")
     parser.add_argument(
-        "--port", type=int, default=8000, help="Loopback HTTP port (default: 8000)."
+        "--port", type=int, default=8765, help="Loopback HTTP port (default: 8765)."
     )
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
@@ -20,3 +20,7 @@ def main() -> None:
         log_level="info",
         access_log=False,
     )
+
+
+if __name__ == "__main__":
+    main()
