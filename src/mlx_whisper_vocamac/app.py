@@ -20,6 +20,7 @@ MODEL_REVISION = "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb"
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
 MAX_MULTIPART_OVERHEAD_BYTES = 64 * 1024
 MAX_PROMPT_CHARS = 500
+REQUEST_TOO_LARGE_MESSAGE = "The request exceeds the upload size limit."
 SUPPORTED_AUDIO_SUFFIXES = {".aac", ".flac", ".m4a", ".mp3", ".mp4", ".ogg", ".wav", ".webm"}
 
 Transcriber = Callable[..., dict[str, Any]]
@@ -32,7 +33,7 @@ class RequestBodyTooLarge(HTTPException):
     def __init__(self) -> None:
         super().__init__(
             status_code=413,
-            detail="The request exceeds the upload size limit.",
+            detail=REQUEST_TOO_LARGE_MESSAGE,
         )
 
 
@@ -113,7 +114,7 @@ def _request_too_large_response() -> JSONResponse:
     return _error(
         413,
         "request_too_large",
-        "The request exceeds the upload size limit.",
+        REQUEST_TOO_LARGE_MESSAGE,
     )
 
 

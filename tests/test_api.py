@@ -98,6 +98,19 @@ def test_unsupported_format_is_rejected() -> None:
     assert response.json()["error"]["code"] == "unsupported_audio"
 
 
+def test_empty_audio_is_rejected_without_calling_the_backend() -> None:
+    client = TestClient(create_app(transcriber=lambda *_args, **_kwargs: pytest.fail()))
+
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": MODEL_ALIAS},
+        files=wav_upload(b""),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "empty_audio"
+
+
 def test_oversized_audio_is_rejected_before_backend_call() -> None:
     client = TestClient(
         create_app(
