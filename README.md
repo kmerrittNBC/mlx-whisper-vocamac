@@ -59,6 +59,11 @@ lsof -nP -iTCP:8765 -sTCP:LISTEN
 No output means no process is listening. If a process is listed, identify it
 before proceeding; do not kill an unknown process.
 
+The API starts on `http://127.0.0.1:8765`. Audio is held in a request-scoped
+temporary file while FFmpeg/MLX reads it, and that file is removed after
+processing. Audio uploads are limited to 25 MiB, with up to 64 KiB for multipart
+framing and form fields. Transcripts and audio are not logged.
+
 The first transcription loads the pinned
 `mlx-community/whisper-large-v3-turbo` checkpoint. If it is not cached, the
 first request downloads about 1.6 GB to `~/.cache/huggingface`, outside the
@@ -276,6 +281,30 @@ by `uninstall`.
 
 For a foreground-only diagnostic, follow the two-terminal procedure in
 [Optional foreground troubleshooting](#optional-foreground-troubleshooting).
+
+## Failure, recovery, and privacy
+
+`/health` reports `starting` until a transcription succeeds in the current
+process. A failed model startup or inference returns HTTP 503 with the generic
+`backend_unavailable` error and leaves health at `starting`; retry after
+resolving a persistent backend problem. After one successful transcription,
+health stays `ready` even if an individual later request fails. Unsupported
+filename extensions and malformed multipart requests return HTTP 400. A
+supported filename whose contents cannot be decoded may reach the backend and
+return the same generic HTTP 503 response. Requests above the upload limit
+return HTTP 413. The service rejects encoded request bodies larger than 25 MiB
+plus 64 KiB before multipart parsing, including streaming requests without a
+`Content-Length` header; an audio payload just over 25 MiB is rejected after
+bounded multipart parsing.
+
+Inference is serialized: concurrent dictations wait rather than using the MLX
+backend in parallel. Disconnecting or canceling a client does not interrupt an
+in-progress model call. The service keeps that request's temporary audio file
+until the backend finishes, then removes it; a disconnected client receives no
+result and can retry afterward. The HTTP access log is disabled, and backend
+failures log only the exception type—not the exception message, audio, filename,
+or transcript. Do not enable request-body or transcription logging in a proxy or
+server added in front of this loopback-only service.
 
 ## Development
 

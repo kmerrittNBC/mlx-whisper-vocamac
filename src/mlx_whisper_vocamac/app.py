@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import tempfile
@@ -8,19 +9,78 @@ from pathlib import Path
 from threading import Lock
 from typing import Annotated, Any
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from starlette.concurrency import run_in_threadpool
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 MODEL_ALIAS = "transcription-default"
 MODEL_ID = "mlx-community/whisper-large-v3-turbo"
 MODEL_REVISION = "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb"
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
+MAX_MULTIPART_OVERHEAD_BYTES = 64 * 1024
 MAX_PROMPT_CHARS = 500
+REQUEST_TOO_LARGE_MESSAGE = "The request exceeds the upload size limit."
 SUPPORTED_AUDIO_SUFFIXES = {".aac", ".flac", ".m4a", ".mp3", ".mp4", ".ogg", ".wav", ".webm"}
 
 Transcriber = Callable[..., dict[str, Any]]
 logger = logging.getLogger(__name__)
+
+
+class RequestBodyTooLarge(HTTPException):
+    """The encoded multipart request exceeds the bounded upload size."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=413,
+            detail=REQUEST_TOO_LARGE_MESSAGE,
+        )
+
+
+class UploadRequestLimitMiddleware:
+    """Bound the request body before Starlette spools multipart uploads to disk."""
+
+    def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] != "http"
+            or scope["method"] != "POST"
+            or scope["path"] != "/v1/audio/transcriptions"
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        content_length = next(
+            (
+                value
+                for name, value in scope.get("headers", ())
+                if name.lower() == b"content-length"
+            ),
+            None,
+        )
+        try:
+            declared_length = int(content_length) if content_length is not None else None
+        except ValueError:
+            declared_length = None
+        if declared_length is not None and declared_length > self.max_bytes:
+            await _request_too_large_response()(scope, receive, send)
+            return
+
+        received_bytes = 0
+
+        async def limited_receive() -> dict[str, Any]:
+            nonlocal received_bytes
+            message = await receive()
+            if message["type"] == "http.request":
+                received_bytes += len(message.get("body", b""))
+                if received_bytes > self.max_bytes:
+                    raise RequestBodyTooLarge()
+            return message
+
+        await self.app(scope, limited_receive, send)
 
 
 def transcribe_with_mlx(
@@ -50,6 +110,14 @@ def _error(status_code: int, code: str, message: str) -> JSONResponse:
     )
 
 
+def _request_too_large_response() -> JSONResponse:
+    return _error(
+        413,
+        "request_too_large",
+        REQUEST_TOO_LARGE_MESSAGE,
+    )
+
+
 def _verbose_response(result: dict[str, Any]) -> dict[str, Any]:
     segments = [
         {
@@ -75,8 +143,16 @@ def create_app(
     max_audio_bytes: int = MAX_AUDIO_BYTES,
 ) -> FastAPI:
     app = FastAPI(title="MLX Whisper for VocaMac", docs_url=None, redoc_url=None)
+    app.add_middleware(
+        UploadRequestLimitMiddleware,
+        max_bytes=max_audio_bytes + MAX_MULTIPART_OVERHEAD_BYTES,
+    )
     inference_lock = Lock()
     app.state.model_ready = False
+
+    @app.exception_handler(RequestBodyTooLarge)
+    async def request_body_too_large(_request: Request, _exc: RequestBodyTooLarge) -> JSONResponse:
+        return _request_too_large_response()
 
     @app.get("/health")
     async def health() -> Response:
@@ -132,7 +208,15 @@ def create_app(
                 with inference_lock:
                     return transcriber(temp_path, language=language, prompt=prompt)
 
-            result = await run_in_threadpool(run_inference)
+            inference_task = asyncio.create_task(run_in_threadpool(run_inference))
+            try:
+                result = await asyncio.shield(inference_task)
+            except asyncio.CancelledError:
+                try:
+                    await inference_task
+                except Exception:
+                    pass
+                raise
             text = result.get("text")
             if not isinstance(text, str):
                 raise ValueError("The transcription backend returned no text.")
