@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -7,6 +8,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 
 from mlx_whisper_vocamac.app import MODEL_ALIAS, create_app
@@ -363,3 +365,89 @@ def test_cancelled_client_request_keeps_audio_until_backend_finishes_then_cleans
 
     assert len(observed_paths) == 1
     assert not observed_paths[0].exists()
+
+
+def test_socket_disconnect_keeps_audio_until_backend_finishes_then_cleans_it() -> None:
+    backend_started = threading.Event()
+    release_backend = threading.Event()
+    backend_finished = threading.Event()
+    observed_paths: list[Path] = []
+
+    def transcriber(
+        audio_path: Path, *, language: str | None, prompt: str | None
+    ) -> dict[str, str]:
+        observed_paths.append(audio_path)
+        backend_started.set()
+        if not release_backend.wait(timeout=5):
+            raise TimeoutError("test backend was not released")
+        backend_finished.set()
+        return {"text": "ok"}
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(
+        uvicorn.Config(
+            create_app(transcriber=transcriber),
+            log_level="critical",
+            access_log=False,
+            lifespan="off",
+        )
+    )
+    server_thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+    client_socket: socket.socket | None = None
+    server_thread.start()
+
+    try:
+        startup_deadline = time.monotonic() + 5
+        while not server.started and time.monotonic() < startup_deadline:
+            time.sleep(0.01)
+        assert server.started
+
+        boundary = b"disconnect-test-boundary"
+        body = (
+            b"--" + boundary + b"\r\n"
+            b'Content-Disposition: form-data; name="model"\r\n\r\n'
+            b"transcription-default\r\n"
+            b"--" + boundary + b"\r\n"
+            b'Content-Disposition: form-data; name="file"; filename="sample.wav"\r\n'
+            b"Content-Type: audio/wav\r\n\r\n"
+            b"RIFFsynthetic-audio"
+            b"\r\n--" + boundary + b"--\r\n"
+        )
+        client_socket = socket.create_connection(("127.0.0.1", port), timeout=5)
+        client_socket.sendall(
+            b"POST /v1/audio/transcriptions HTTP/1.1\r\n"
+            + f"Host: 127.0.0.1:{port}\r\n".encode()
+            + b"Connection: close\r\n"
+            + b"Content-Type: multipart/form-data; boundary="
+            + boundary
+            + b"\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+
+        assert backend_started.wait(timeout=5)
+        assert len(observed_paths) == 1
+        assert observed_paths[0].is_file()
+        client_socket.close()
+        client_socket = None
+        assert observed_paths[0].is_file()
+
+        release_backend.set()
+        assert backend_finished.wait(timeout=5)
+        cleanup_deadline = time.monotonic() + 5
+        while observed_paths[0].exists() and time.monotonic() < cleanup_deadline:
+            time.sleep(0.01)
+        assert not observed_paths[0].exists()
+    finally:
+        release_backend.set()
+        if client_socket is not None:
+            client_socket.close()
+        server.should_exit = True
+        server_thread.join(timeout=5)
+        listener.close()
+
+    assert not server_thread.is_alive()
