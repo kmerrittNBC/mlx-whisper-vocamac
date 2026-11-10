@@ -60,8 +60,6 @@ if ! launchctl print "$gui_domain/$LABEL" >/dev/null 2>&1 \
     fail "Resolve the port conflict before installing the LaunchAgent."
 fi
 
-brew install uv ffmpeg
-
 if [ -z "$APP_PATH" ]; then
     if [ -d /Applications/VocaMac.app ]; then
         APP_PATH=/Applications/VocaMac.app
@@ -88,6 +86,8 @@ if [ ! -d "$APP_PATH" ]; then
     brew trust vocahq/vocamac
     brew install --cask vocamac
 fi
+
+brew install uv ffmpeg
 
 plist_buddy=/usr/libexec/PlistBuddy
 [ -x "$plist_buddy" ] || fail "Could not verify VocaMac's version with $plist_buddy."

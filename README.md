@@ -218,16 +218,14 @@ testing.
 1. Open a blank document in **TextEdit** and click in the document body.
 2. Press and hold Left Option+F3 (⌥F3), say “VocaMac local endpoint test,”
    then release the key. Wait for transcription.
-3. Confirm the words appear at the cursor. Repeat in a second field, such as a
-   new note in **Notes**.
-4. With the cursor in a disposable text field, hold the hotkey silently and
-   release it. Confirm silence does not insert stray words.
-5. Run `curl -sS http://127.0.0.1:8765/health`; after any successful
-   transcription it should return `{"status":"ready"}`.
+3. Confirm the words appear at the cursor, then run
+   `curl -sS http://127.0.0.1:8765/health`; it should return
+   `{"status":"ready"}`.
 
 If dictation inserts text but health remains `starting`, VocaMac likely used
 one of its local engines instead of the Custom Endpoint. Recheck that
 **Custom Endpoint** is selected, then make one more short test dictation.
+Additional cross-field and silence checks are part of issue #4.
 
 Record the VocaMac version, endpoint kind, base URL, model, permission outcomes,
 which text fields passed, and the silence result in issue #4. Do not include
@@ -276,11 +274,8 @@ by `uninstall`.
 | No audio is captured | Enable **Microphone** permission and check the selected input device in VocaMac settings. |
 | API says `model_not_found` | Set the model to exactly `transcription-default`. |
 
-For a foreground-only diagnostic, stop the LaunchAgent first, then run
-`uv run mlx-whisper-vocamac` in Terminal. Do not start a second server while
-the LaunchAgent is running; both use port 8765 by default. Press Control-C to
-stop the foreground server, then run `uv run mlx-whisper-vocamac-agent start`
-to return to the LaunchAgent.
+For a foreground-only diagnostic, follow the two-terminal procedure in
+[Optional foreground troubleshooting](#optional-foreground-troubleshooting).
 
 ## Development
 

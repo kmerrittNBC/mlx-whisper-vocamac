@@ -104,9 +104,14 @@ def copy_installer_to_primary_checkout(tmp_path: Path) -> Path:
     return installer
 
 
-def run_installer(env: dict[str, str], installer: Path) -> subprocess.CompletedProcess[str]:
+def run_installer(
+    env: dict[str, str], installer: Path, *, accept_tap_trust: bool = True
+) -> subprocess.CompletedProcess[str]:
+    command = ["sh", str(installer)]
+    if accept_tap_trust:
+        command.append("--yes")
     return subprocess.run(
-        ["sh", str(installer), "--yes"],
+        command,
         capture_output=True,
         text=True,
         env=env,
@@ -123,10 +128,10 @@ def test_clean_setup_installs_vocamac_and_service_then_opens_the_app(tmp_path: P
     assert result.returncode == 0, result.stderr
     commands = log.read_text().splitlines()
     assert commands == [
-        "brew install uv ffmpeg",
         "brew tap vocahq/vocamac",
         "brew trust vocahq/vocamac",
         "brew install --cask vocamac",
+        "brew install uv ffmpeg",
         "uv sync --group dev",
         "uv run mlx-whisper-vocamac-agent install",
         f"open -a {env['VOCAMAC_APP_PATH']}",
@@ -166,6 +171,19 @@ def test_port_collision_stops_before_installing_or_starting_services(tmp_path: P
     assert result.returncode != 0
     assert "8765" in result.stderr
     assert "node 123" in result.stderr
+    assert not log.exists()
+
+
+def test_noninteractive_install_requires_explicit_tap_trust_before_changes(
+    tmp_path: Path,
+) -> None:
+    env, log = installer_environment(tmp_path)
+    installer = copy_installer_to_primary_checkout(tmp_path)
+
+    result = run_installer(env, installer, accept_tap_trust=False)
+
+    assert result.returncode != 0
+    assert "interactive confirmation" in result.stderr
     assert not log.exists()
 
 
