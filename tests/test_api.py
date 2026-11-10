@@ -1,17 +1,25 @@
 import asyncio
 import logging
 import socket
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import ModuleType
 
 import httpx
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from mlx_whisper_vocamac.app import MODEL_ALIAS, create_app
+from mlx_whisper_vocamac.app import (
+    MODEL_ALIAS,
+    MODEL_ID,
+    MODEL_REVISION,
+    create_app,
+    transcribe_with_mlx,
+)
 
 
 def wav_upload(data: bytes = b"RIFF-test-audio") -> dict[str, tuple[str, bytes, str]]:
@@ -207,6 +215,55 @@ def test_malformed_multipart_is_rejected_without_calling_the_backend() -> None:
     )
 
     assert response.status_code == 400
+
+
+def test_mlx_snapshot_startup_failure_can_recover_on_retry(monkeypatch) -> None:
+    snapshot_calls = 0
+    observed_download: dict[str, str] = {}
+    observed_transcription: dict[str, object] = {}
+
+    def snapshot_download(*, repo_id: str, revision: str) -> str:
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        observed_download.update(repo_id=repo_id, revision=revision)
+        if snapshot_calls == 1:
+            raise OSError("temporary model snapshot failure")
+        return "/external-model-cache/pinned-snapshot"
+
+    def transcribe(audio_path: str, **options: object) -> dict[str, str]:
+        observed_transcription.update(audio_path=audio_path, **options)
+        return {"text": "ok"}
+
+    mlx_module = ModuleType("mlx_whisper")
+    mlx_module.transcribe = transcribe
+    hub_module = ModuleType("huggingface_hub")
+    hub_module.snapshot_download = snapshot_download
+    monkeypatch.setitem(sys.modules, "mlx_whisper", mlx_module)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub_module)
+
+    client = TestClient(create_app(transcriber=transcribe_with_mlx))
+    with client:
+        failed = client.post(
+            "/v1/audio/transcriptions",
+            data={"model": MODEL_ALIAS},
+            files=wav_upload(),
+        )
+        health_after_failure = client.get("/health")
+        recovered = client.post(
+            "/v1/audio/transcriptions",
+            data={"model": MODEL_ALIAS},
+            files=wav_upload(),
+        )
+
+    assert failed.status_code == 503
+    assert failed.json()["error"]["code"] == "backend_unavailable"
+    assert health_after_failure.json() == {"status": "starting"}
+    assert recovered.status_code == 200
+    assert recovered.json() == {"text": "ok"}
+    assert client.get("/health").json() == {"status": "ready"}
+    assert snapshot_calls == 2
+    assert observed_download == {"repo_id": MODEL_ID, "revision": MODEL_REVISION}
+    assert observed_transcription["path_or_hf_repo"] == "/external-model-cache/pinned-snapshot"
 
 
 def test_malformed_audio_failure_recovers_and_does_not_log_request_data(caplog) -> None:
