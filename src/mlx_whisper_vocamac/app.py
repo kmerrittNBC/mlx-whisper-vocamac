@@ -65,11 +65,7 @@ class UploadRequestLimitMiddleware:
         except ValueError:
             declared_length = None
         if declared_length is not None and declared_length > self.max_bytes:
-            await _error(
-                413,
-                "request_too_large",
-                "The request exceeds the upload size limit.",
-            )(scope, receive, send)
+            await _request_too_large_response()(scope, receive, send)
             return
 
         received_bytes = 0
@@ -113,6 +109,14 @@ def _error(status_code: int, code: str, message: str) -> JSONResponse:
     )
 
 
+def _request_too_large_response() -> JSONResponse:
+    return _error(
+        413,
+        "request_too_large",
+        "The request exceeds the upload size limit.",
+    )
+
+
 def _verbose_response(result: dict[str, Any]) -> dict[str, Any]:
     segments = [
         {
@@ -147,11 +151,7 @@ def create_app(
 
     @app.exception_handler(RequestBodyTooLarge)
     async def request_body_too_large(_request: Request, _exc: RequestBodyTooLarge) -> JSONResponse:
-        return _error(
-            413,
-            "request_too_large",
-            "The request exceeds the upload size limit.",
-        )
+        return _request_too_large_response()
 
     @app.get("/health")
     async def health() -> Response:
